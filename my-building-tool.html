@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Building Tool</title>
+    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
+    <link href="[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap)" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5; /* Light gray background */
+        }
+        canvas {
+            display: block;
+            background-color: #e0e7ff; /* Light blue background for canvas */
+            border-radius: 0.75rem; /* Rounded corners */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+            touch-action: none; /* Prevent default touch actions like scrolling/zooming */
+        }
+        .tool-button {
+            @apply flex-1 px-4 py-2 rounded-lg font-semibold transition-colors duration-200;
+        }
+        .tool-button.active {
+            @apply bg-indigo-600 text-white shadow-md;
+        }
+        .tool-button:not(.active) {
+            @apply bg-gray-200 text-gray-800 hover:bg-gray-300;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="max-w-4xl w-full bg-white rounded-xl shadow-lg p-6 space-y-6">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">3D Building Tool</h1>
+
+        <div class="flex flex-col sm:flex-row justify-center items-center space-y-4 sm:space-y-0 sm:space-x-4 mb-6">
+            <button id="placeToolBtn" class="tool-button active" data-tool="place">
+                Place Cube
+            </button>
+            <button id="paintToolBtn" class="tool-button" data-tool="paint">
+                Paint Cube
+            </button>
+            <button id="deleteToolBtn" class="tool-button" data-tool="delete">
+                Delete Cube
+            </button>
+            <div class="flex items-center space-x-2 bg-gray-100 p-2 rounded-lg">
+                <label for="colorPicker" class="text-gray-700 font-medium">Color:</label>
+                <input type="color" id="colorPicker" value="#4f46e5" class="w-10 h-10 rounded-md border-none cursor-pointer">
+            </div>
+        </div>
+
+        <canvas id="buildingCanvas" class="w-full aspect-video"></canvas>
+
+        <p id="statusMessage" class="text-center text-gray-600 text-sm mt-4">
+            Click on the grid to place cubes. Select a tool above.
+        </p>
+    </div>
+
+    <script src="[https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js](https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js)"></script>
+    <script>
+        // Global variables for Three.js scene
+        let scene, camera, renderer, controls;
+        let raycaster;
+        let mouse;
+        let currentTool = 'place'; // 'place', 'paint', 'delete'
+        let currentColor = new THREE.Color(0x4f46e5); // Default indigo color
+        const cubeSize = 1; // Size of each cube
+        const gridSnap = cubeSize; // Snap to grid based on cube size
+        const cubes = new Map(); // Stores cubes by their position string (e.g., "x,y,z")
+
+        // Keyboard movement variables
+        const pressedKeys = new Set();
+        const cameraSpeed = 0.15; // Speed of camera movement
+        const lookAtTarget = new THREE.Vector3(0, 0, 0); // The point the camera is looking at
+
+        // DOM elements
+        const buildingCanvas = document.getElementById('buildingCanvas');
+        const placeToolBtn = document.getElementById('placeToolBtn');
+        const paintToolBtn = document.getElementById('paintToolBtn');
+        const deleteToolBtn = document.getElementById('deleteToolBtn');
+        const colorPicker = document.getElementById('colorPicker');
+        const statusMessage = document.getElementById('statusMessage');
+
+        // --- Initialization ---
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xe0e7ff); // Canvas background color
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, buildingCanvas.clientWidth / buildingCanvas.clientHeight, 0.1, 1000);
+            camera.position.set(10, 10, 10);
+            camera.lookAt(lookAtTarget); // Look at the target
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ canvas: buildingCanvas, antialias: true });
+            renderer.setSize(buildingCanvas.clientWidth, buildingCanvas.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            // Grid Helper
+            const gridHelper = new THREE.GridHelper(20, 20, 0x000000, 0x888888);
+            gridHelper.position.y = -cubeSize / 2; // Position grid at the bottom of cubes
+            scene.add(gridHelper);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7);
+            scene.add(directionalLight);
+
+            // Raycaster and Mouse vector for interactions
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            // --- Event Listeners ---
+            buildingCanvas.addEventListener('click', onCanvasClick);
+            window.addEventListener('resize', onWindowResize);
+
+            // Tool button listeners
+            placeToolBtn.addEventListener('click', () => setTool('place'));
+            paintToolBtn.addEventListener('click', () => setTool('paint'));
+            deleteToolBtn.addEventListener('click', () => setTool('delete'));
+
+            // Color picker listener
+            colorPicker.addEventListener('input', (event) => {
+                currentColor.set(event.target.value);
+                statusMessage.textContent = `Current color selected: ${event.target.value}.`;
+            });
+
+            // Keyboard event listeners for camera movement
+            window.addEventListener('keydown', onKeyDown);
+            window.addEventListener('keyup', onKeyUp);
+
+            // Initial tool and status update
+            updateToolButtons();
+            statusMessage.textContent = "Place Cube tool active. Click on the grid to place cubes. Use WASD to move camera.";
+
+            // Start animation loop
+            animate();
+        }
+
+        // --- Core Functions ---
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Handle keyboard camera movement
+            handleKeyboardMovement();
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle canvas clicks for building actions
+        function onCanvasClick(event) {
+            // Calculate mouse position in normalized device coordinates (-1 to +1)
+            const rect = buildingCanvas.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersects = raycaster.intersectObjects(scene.children, true);
+
+            if (intersects.length > 0) {
+                const intersect = intersects[0];
+                const object = intersect.object;
+
+                if (currentTool === 'place') {
+                    // Place a cube
+                    // Find the position on the grid plane
+                    let position = new THREE.Vector3().copy(intersect.point).add(intersect.face.normal);
+                    position.divideScalar(gridSnap).floor().multiplyScalar(gridSnap).addScalar(cubeSize / 2);
+
+                    // Adjust position if clicking on an existing cube's face
+                    if (object.userData.isCube) {
+                        position.copy(object.position).add(intersect.face.normal.multiplyScalar(cubeSize));
+                    }
+
+                    const posKey = `${position.x},${position.y},${position.z}`;
+
+                    if (!cubes.has(posKey)) {
+                        const geometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+                        const material = new THREE.MeshStandardMaterial({ color: currentColor.getHex() });
+                        const cube = new THREE.Mesh(geometry, material);
+                        cube.position.copy(position);
+                        cube.userData.isCube = true; // Mark as a cube for easier identification
+                        scene.add(cube);
+                        cubes.set(posKey, cube);
+                        statusMessage.textContent = `Cube placed at (${position.x}, ${position.y}, ${position.z}).`;
+                    } else {
+                        statusMessage.textContent = "Cannot place a cube here, space is occupied.";
+                    }
+
+                } else if (currentTool === 'paint') {
+                    // Paint a cube
+                    if (object.userData.isCube) {
+                        object.material.color.set(currentColor.getHex());
+                        statusMessage.textContent = `Cube painted to ${colorPicker.value}.`;
+                    } else {
+                        statusMessage.textContent = "Click on an existing cube to paint it.";
+                    }
+                } else if (currentTool === 'delete') {
+                    // Delete a cube
+                    if (object.userData.isCube) {
+                        const posKey = `${object.position.x},${object.position.y},${object.position.z}`;
+                        scene.remove(object);
+                        cubes.delete(posKey);
+                        statusMessage.textContent = `Cube deleted at (${object.position.x}, ${object.position.y}, ${object.position.z}).`;
+                        object.geometry.dispose(); // Clean up geometry from memory
+                        object.material.dispose(); // Clean up material from memory
+                    } else {
+                        statusMessage.textContent = "Click on an existing cube to delete it.";
+                    }
+                }
+            } else {
+                statusMessage.textContent = "No object intersected. Try clicking on the grid or an existing cube.";
+            }
+        }
+
+        // Handle window resizing
+        function onWindowResize() {
+            camera.aspect = buildingCanvas.clientWidth / buildingCanvas.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(buildingCanvas.clientWidth, buildingCanvas.clientHeight);
+        }
+
+        // Set the active tool
+        function setTool(tool) {
+            currentTool = tool;
+            updateToolButtons();
+            switch (tool) {
+                case 'place':
+                    statusMessage.textContent = "Place Cube tool active. Click on the grid to place cubes. Use WASD to move camera.";
+                    break;
+                case 'paint':
+                    statusMessage.textContent = `Paint Cube tool active. Click on an existing cube to paint it ${colorPicker.value}.`;
+                    break;
+                case 'delete':
+                    statusMessage.textContent = "Delete Cube tool active. Click on an existing cube to delete it.";
+                    break;
+            }
+        }
+
+        // Update button styles based on active tool
+        function updateToolButtons() {
+            [placeToolBtn, paintToolBtn, deleteToolBtn].forEach(btn => {
+                if (btn.dataset.tool === currentTool) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        // --- Keyboard Camera Controls ---
+        function onKeyDown(event) {
+            // Prevent default browser scrolling if keys like space are pressed
+            if (['w', 'a', 's', 'd'].includes(event.key.toLowerCase())) {
+                event.preventDefault();
+            }
+            pressedKeys.add(event.key.toLowerCase());
+        }
+
+        function onKeyUp(event) {
+            pressedKeys.delete(event.key.toLowerCase());
+        }
+
+        function handleKeyboardMovement() {
+            const moveDelta = new THREE.Vector3();
+            const cameraDirection = new THREE.Vector3();
+            camera.getWorldDirection(cameraDirection); // Get the direction the camera is looking
+
+            // Create a "flat" forward direction (parallel to the XZ plane)
+            const flatForward = cameraDirection.clone();
+            flatForward.y = 0; // Zero out the Y component
+            flatForward.normalize(); // Normalize to ensure consistent speed
+
+            // Create a "flat" right direction (perpendicular to flatForward and up)
+            const flatRight = new THREE.Vector3();
+            flatRight.crossVectors(new THREE.Vector3(0, 1, 0), flatForward).normalize(); // Cross with Y-axis
+
+            // Forward/Backward (W/S)
+            if (pressedKeys.has('w')) {
+                moveDelta.add(flatForward);
+            }
+            if (pressedKeys.has('s')) {
+                moveDelta.sub(flatForward);
+            }
+
+            // Left/Right (A/D) - Strafe
+            if (pressedKeys.has('a')) {
+                moveDelta.add(flatRight);
+            }
+            if (pressedKeys.has('d')) {
+                moveDelta.sub(flatRight);
+            }
+
+            // Apply movement if there's any
+            if (moveDelta.lengthSq() > 0) {
+                moveDelta.normalize().multiplyScalar(cameraSpeed);
+                camera.position.add(moveDelta);
+                // Adjust the lookAtTarget by the same delta
+                lookAtTarget.add(moveDelta);
+                camera.lookAt(lookAtTarget);
+            }
+        }
+
+        // Ensure the scene is initialized after the window loads
+        window.onload = init;
+
+        // Basic camera controls (mouse drag to rotate)
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+
+        buildingCanvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) { // Left mouse button
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            }
+        });
+
+        buildingCanvas.addEventListener('mouseup', (e) => {
+            if (e.button === 0) { // Left mouse button
+                isDragging = false;
+            }
+        });
+
+        buildingCanvas.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            const deltaX = e.clientX - previousMousePosition.x;
+            const deltaY = e.clientY - previousMousePosition.y;
+
+            // Rotate camera around the lookAtTarget
+            const spherical = new THREE.Spherical().setFromVector3(camera.position.clone().sub(lookAtTarget));
+
+            spherical.theta -= deltaX * 0.005; // Horizontal rotation
+            spherical.phi -= deltaY * 0.005;   // Vertical rotation
+
+            // Clamp phi to avoid camera flipping (looking straight up or down)
+            spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
+
+            camera.position.setFromSpherical(spherical).add(lookAtTarget); // Re-add the lookAtTarget offset
+            camera.lookAt(lookAtTarget); // Keep looking at the target
+
+            previousMousePosition = { x: e.clientX, y: e.clientY };
+        });
+
+        // Zoom with mouse wheel
+        buildingCanvas.addEventListener('wheel', (e) => {
+            e.preventDefault(); // Prevent page scrolling
+            const zoomSpeed = 0.1;
+
+            // Zoom by moving the camera closer/further from the lookAtTarget
+            const direction = new THREE.Vector3().subVectors(camera.position, lookAtTarget).normalize();
+            const distance = camera.position.distanceTo(lookAtTarget);
+            let newDistance = distance + (e.deltaY * zoomSpeed);
+
+            // Clamp zoom distance
+            newDistance = Math.max(1, Math.min(50, newDistance)); // Minimum 1 unit, maximum 50 units away
+
+            camera.position.copy(direction).multiplyScalar(newDistance).add(lookAtTarget);
+            camera.lookAt(lookAtTarget);
+            camera.updateProjectionMatrix(); // Update if FOV was changed, but not needed for position zoom
+        });
+    </script>
+</body>
+</html>
